@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+python-multipart
+langchain
+langchain-core
+langchain-google-genai
+langchain-openai
+langchain-community
+supabase
+pypdf
+tiktoken

@@ -4,6 +4,7 @@ from typing import List, Dict, Any
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware  # CORS 모듈 추가
 from pydantic import BaseModel
 
 # LangChain 및 AI 모델 관련 임포트
@@ -18,6 +19,17 @@ from langchain_community.vectorstores import SupabaseVectorStore
 from supabase.client import create_client, Client
 
 app = FastAPI(title="Google Cloud Run RAG Server")
+
+# ==============================================================================
+# 0. CORS 미들웨어 설정 (프론트엔드 통신 허용)
+# ==============================================================================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],          # 구글 앱스 스크립트를 포함한 모든 도메인 허용
+    allow_credentials=False,
+    allow_methods=["*"],          # 모든 통신 방식(GET, POST, OPTIONS 등) 허용
+    allow_headers=["*"],          # 모든 헤더 허용
+)
 
 # ==============================================================================
 # 1. 환경 변수 로드 및 초기화

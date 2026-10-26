@@ -9,3 +9,14 @@ langchain-community
 supabase
 pypdf
 tiktoken
+fastapi==0.104.1
+uvicorn==0.24.0
+python-multipart==0.0.6
+langchain==0.1.16
+langchain-core==0.1.45
+langchain-google-genai==1.0.3
+langchain-openai==0.1.3
+langchain-community==0.0.34
+supabase==2.4.5
+pypdf==4.2.0
+tiktoken==0.6.0

@@ -1,3 +1,16 @@
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI(title="Google Cloud Run RAG Server")
+
+# CORS 설정 (OPTIONS 프리플라이트 요청이 405 에러를 내지 않도록 모든 메서드와 헤더를 명시적으로 허용)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],          # 모든 도메인(구글 앱스 스크립트 포함) 허용
+    allow_credentials=False,      # allow_origins=["*"] 사용 시 False로 설정해야 충돌이 방지됩니다.
+    allow_methods=["GET", "POST", "OPTIONS"], # OPTIONS 메서드 명시적 허용
+    allow_headers=["*"],
+)
+
 import os
 import tempfile
 from typing import List, Dict, Any

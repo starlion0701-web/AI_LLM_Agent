@@ -116,7 +116,7 @@ async def chat_with_rag(request: ChatRequest):
     try:
         # 1. LLM 초기화 (요청하신 gemini-3.5-flash-lite 모델)
         llm = ChatGoogleGenerativeAI(
-            model="gemini-3.5-flash-lite", 
+            model="gemini-1.5-flash",
             google_api_key=GOOGLE_API_KEY,
             temperature=0.2, # 명확하고 일관된 답변을 위해 낮게 설정
             streaming=True # 실시간 스트리밍 활성화

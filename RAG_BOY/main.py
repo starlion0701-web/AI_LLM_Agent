@@ -142,14 +142,28 @@ async def chat_with_rag(request: ChatRequest):
         # 프롬프트 -> LLM -> 일반 텍스트 파서 연결
         query_augmentation_chain = augmentation_prompt | llm | StrOutputParser()
 
-        # 4. 질의 증강 체인 실행 (데이터 주입)
+      # 4. 질의 증강 체인 실행 (데이터 주입)
         try:
-            augmented_query = query_augmentation_chain.invoke({
+            # invoke -> ainvoke 로 변경하고 앞에 await 추가
+            augmented_query = await query_augmentation_chain.ainvoke({
                 "chat_history": formatted_history,
                 "query": request.query
             })
         except Exception as aug_err:
             raise RuntimeError(f"질의 확장(Query Augmentation) 중 오류 발생: {str(aug_err)}")
+
+        # 5. 증강된 질의로 벡터 DB 검색 (Retriever)
+        try:
+            vector_store = SupabaseVectorStore(
+                client=supabase,
+                embedding=embeddings,
+                table_name="documents",
+                query_name="match_documents"
+            )
+            # similarity_search -> asimilarity_search 로 변경하고 앞에 await 추가
+            retrieved_docs = await vector_store.asimilarity_search(augmented_query, k=4)
+            # 검색된 문서들을 하나의 문자열로 결합
+            context_text = "\n\n".join([doc.page_content for doc in retrieved_docs])
 
         # 5. 증강된 질의로 벡터 DB 검색 (Retriever)
         try:

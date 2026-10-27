@@ -1,5 +1,6 @@
 import os
 import tempfile
+import asyncio
 from typing import List, Dict, Any
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -7,7 +8,6 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# 충돌을 일으키는 SystemMessage를 없애고 단순 PromptTemplate로 교체
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -40,7 +40,14 @@ embeddings = OpenAIEmbeddings(model="text-embedding-3-small", openai_api_key=OPE
 
 class ChatRequest(BaseModel):
     query: str
-    chat_history: List[Dict[str, str]]
+    chat_history: List[Dict[str, str]] = []
+
+# 🔥 강제 CORS 헤더 (FastAPI 스트리밍 버그 원천 차단)
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "*",
+    "Access-Control-Allow-Headers": "*",
+}
 
 @app.post("/upload-pdf")
 async def upload_and_process_pdf(file: UploadFile = File(...)):
@@ -74,7 +81,6 @@ async def upload_and_process_pdf(file: UploadFile = File(...)):
 
 @app.post("/chat")
 async def chat_with_rag(request: ChatRequest):
-    # 최후의 방어선: 어떤 에러가 나더라도 500 에러(Failed to fetch) 대신 텍스트로 원인을 출력
     try:
         llm = ChatGoogleGenerativeAI(
             model="gemini-pro",
@@ -83,58 +89,58 @@ async def chat_with_rag(request: ChatRequest):
             streaming=True
         )
 
-        # 1. 역할 충돌 방지: 대화 기록을 단순 문자열로 뭉쳐서 처리
         history_str = ""
-        for msg in request.chat_history:
-            role = "질문" if msg.get("role") == "user" else "답변"
-            history_str += f"{role}: {msg.get('content')}\n"
+        if request.chat_history:
+            for msg in request.chat_history:
+                role = "질문" if msg.get("role") == "user" else "답변"
+                history_str += f"{role}: {msg.get('content')}\n"
 
-        # 2. 질의 증강 시도 (실패하더라도 뻗지 않고 원본 질문을 그대로 사용)
         augmented_query = request.query
         try:
-            aug_prompt = PromptTemplate.from_template(
-                "이전 대화:\n{chat_history}\n\n질문: {query}\n\n위 질문을 대화 문맥에 맞게 한 문장으로 변환해:"
-            )
-            chain = aug_prompt | llm | StrOutputParser()
-            augmented_query = await chain.ainvoke({"chat_history": history_str, "query": request.query})
+            # 🔥 무한 로딩 방지: 10초 내에 응답 없으면 강제 패스
+            if history_str:
+                aug_prompt = PromptTemplate.from_template("이전 대화:\n{chat_history}\n\n질문: {query}\n\n위 질문을 대화 문맥에 맞게 한 문장으로 변환해:")
+                chain = aug_prompt | llm | StrOutputParser()
+                augmented_query = await asyncio.wait_for(
+                    chain.ainvoke({"chat_history": history_str, "query": request.query}),
+                    timeout=10.0
+                )
         except Exception:
-            pass # 실패 시 조용히 넘어가고 원본 query 사용
+            pass
 
-        # 3. DB 검색 시도 (실패 시 서버 다운을 막고 화면에 에러 내용 출력)
         context_text = ""
         try:
+            # 🔥 무한 로딩 방지: 10초 내에 DB 검색 안 되면 강제 종료 후 에러 출력
             vector_store = SupabaseVectorStore(
                 client=supabase,
                 embedding=embeddings,
                 table_name="documents",
                 query_name="match_documents"
             )
-            retrieved_docs = await vector_store.asimilarity_search(augmented_query, k=4)
+            retrieved_docs = await asyncio.wait_for(
+                vector_store.asimilarity_search(augmented_query, k=4),
+                timeout=10.0
+            )
             context_text = "\n\n".join([doc.page_content for doc in retrieved_docs])
         except Exception as db_err:
-            context_text = f"[DB 검색 에러 발생. Supabase 설정을 확인하세요: {str(db_err)}]"
+            context_text = f"[DB 검색 에러 (타임아웃 또는 연결 문제): {str(db_err)}]"
 
-        # 4. 최종 답변 생성 (SystemMessage 객체를 완전히 제거하여 충돌 차단)
         rag_prompt = PromptTemplate.from_template(
             "아래 문서를 바탕으로 질문에 답해.\n\n[문서]\n{context}\n\n[질문]\n{augmented_query}\n\n답변:"
         )
         rag_chain = rag_prompt | llm | StrOutputParser()
 
-        # 5. 스트리밍 반환
         async def stream_generator():
             try:
-                async for chunk in rag_chain.astream({
-                    "context": context_text,
-                    "augmented_query": augmented_query
-                }):
+                async for chunk in rag_chain.astream({"context": context_text, "augmented_query": augmented_query}):
                     yield chunk
             except Exception as stream_err:
                 yield f"\n\n[AI 생성 오류]: {str(stream_err)}"
 
-        return StreamingResponse(stream_generator(), media_type="text/event-stream")
+        # 🔥 headers=CORS_HEADERS 를 강제 주입하여 무조건 통과시킴
+        return StreamingResponse(stream_generator(), media_type="text/event-stream", headers=CORS_HEADERS)
 
     except Exception as e:
-        # 이 블록에 도달하더라도 통신 끊김(Failed to fetch) 대신 친절하게 텍스트 반환
         async def fallback_stream():
-            yield f"서버 내부 치명적 오류가 발생했습니다: {str(e)}"
-        return StreamingResponse(fallback_stream(), media_type="text/event-stream")
+            yield f"서버 내부 오류: {str(e)}"
+        return StreamingResponse(fallback_stream(), media_type="text/event-stream", headers=CORS_HEADERS)

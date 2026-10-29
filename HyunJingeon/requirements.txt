@@ -7,3 +7,4 @@ langchain-google-genai
 langchainhub
 supabase
 python-multipart
+langchain-text-splitters

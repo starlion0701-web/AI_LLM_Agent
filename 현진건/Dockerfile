@@ -1,0 +1,23 @@
+# 베이스 이미지로 경량화된 파이썬 3.12 슬림 버전 사용
+FROM python:3.12-slim
+
+# 작업 디렉토리 설정
+WORKDIR /app
+
+# 시스템 의존성 패키지 설치 (Chroma DB의 sqlite3 구동용)
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# 패키지 목록 복사 및 설치
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 애플리케이션 소스 코드 및 PDF 파일 복사
+COPY . .
+
+# 구글 클라우드 런은 기본적으로 포트 8080을 수신 (포트 충돌을 피하기 위해 8081로 변경 가능하나 Cloud Run 기본 설정 유지)
+ENV PORT 8080
+
+# uvicorn을 사용하여 FastAPI 서버 실행
+CMD exec uvicorn main:app --host 0.0.0.0 --port ${PORT}

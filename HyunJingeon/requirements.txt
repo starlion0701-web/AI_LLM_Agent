@@ -1,0 +1,9 @@
+fastapi==0.109.2
+uvicorn==0.27.1
+pypdf==4.0.1
+langchain==0.1.9
+langchain-google-genai==0.0.9
+langchain-community==0.0.24
+langchainhub==0.1.14
+supabase==2.3.5
+python-multipart==0.0.9

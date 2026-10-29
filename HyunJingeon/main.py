@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pypdf import PdfReader
 
 # Langchain 관련 모듈
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_community.vectorstores import SupabaseVectorStore
 from supabase.client import create_client, Client

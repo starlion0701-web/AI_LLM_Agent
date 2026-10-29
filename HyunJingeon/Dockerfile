@@ -17,4 +17,4 @@ COPY . .
 EXPOSE 8080
 
 # [수정] 클라우드 런이 부여하는 $PORT 환경변수를 동적으로 받도록 변경
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}
+CMD python -u -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}

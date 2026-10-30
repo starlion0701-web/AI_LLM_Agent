@@ -39,8 +39,8 @@ try:
 except Exception as e:
     raise RuntimeError(f"Supabase 클라이언트 초기화 중 에러가 발생했습니다. 상세 내역: {str(e)}")
 
-# 구글 AI 임베딩 모델 설정
-embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
+# 'models/' 접두사를 제외하고 순수 모델명만 작성
+embeddings = GoogleGenerativeAIEmbeddings(model="text-embedding-004")
 
 # 실시간 스트리밍 핸들러 (StreamHandler) 정의
 class StreamHandler(BaseCallbackHandler):

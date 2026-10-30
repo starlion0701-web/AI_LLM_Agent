@@ -1,7 +1,8 @@
 fastapi
 uvicorn
 langchain
-langchain-google-genai
+langchain-google-genai>=1.0.3
+google-generativeai>=0.5.4
 langchain-community
 supabase
 pypdf

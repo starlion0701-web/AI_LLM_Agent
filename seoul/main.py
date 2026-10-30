@@ -40,8 +40,10 @@ except Exception as e:
     raise RuntimeError(f"Supabase 클라이언트 초기화 중 에러가 발생했습니다. 상세 내역: {str(e)}")
 
 # 'models/' 접두사를 제외하고 순수 모델명만 작성
-embeddings = GoogleGenerativeAIEmbeddings(model="text-embedding-004")
-
+embeddings = GoogleGenerativeAIEmbeddings(
+    model="models/gemini-embedding-001",
+    output_dimensionality=768
+)
 # 실시간 스트리밍 핸들러 (StreamHandler) 정의
 class StreamHandler(BaseCallbackHandler):
     def on_llm_new_token(self, token: str, **kwargs: Any) -> None:

@@ -4,6 +4,7 @@ from typing import List, Dict, Any
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware  # [추가된 부분] CORS 미들웨어 임포트
 from pydantic import BaseModel
 
 # Langchain 라이브러리 임포트
@@ -20,6 +21,16 @@ from langchain_core.callbacks.base import BaseCallbackHandler
 
 # FastAPI 앱 초기화
 app = FastAPI(title="Seoul City Planner RAG Server")
+
+# [추가된 부분] CORS 미들웨어 설정 적용
+# 브라우저(구글 앱스 스크립트 등)에서 백엔드 API로 접근할 수 있도록 허용합니다.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # 환경 변수에서 설정값 로드 (구글 클라우드 런 환경 변수에 등록 필요)
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -44,6 +55,7 @@ embeddings = GoogleGenerativeAIEmbeddings(
     model="models/gemini-embedding-001",
     output_dimensionality=768
 )
+
 # 실시간 스트리밍 핸들러 (StreamHandler) 정의
 class StreamHandler(BaseCallbackHandler):
     def on_llm_new_token(self, token: str, **kwargs: Any) -> None:

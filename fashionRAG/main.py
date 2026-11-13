@@ -40,11 +40,67 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GENERATION_MODEL = os.getenv("GENERATION_MODEL", "gemini-1.5-flash")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "models/text-embedding-004")
 
+# 모델 자동 감지 후보군 (404 방지용 우선순위 탐색 리스트)
+CANDIDATE_MODELS = [
+    GENERATION_MODEL,
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-001",
+    "gemini-1.5-flash-002",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-exp",
+    "gemini-1.5-pro",
+    "gemini-1.5-pro-latest",
+    "gemini-pro"
+]
+
+_resolved_model_name: Optional[str] = None
+
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     logger.info("Google AI (Gemini) configured successfully.")
 else:
     logger.warning("GEMINI_API_KEY not found in environment. Mock responses will be used if needed.")
+
+def get_available_model_name() -> Optional[str]:
+    """
+    현재 API 키에서 실제로 generateContent를 지원하는 최적의 모델을 자동 탐색하여 캐시합니다.
+    ModelService.ListModels를 통해 404 오류를 사전 방지합니다.
+    """
+    global _resolved_model_name
+    if _resolved_model_name:
+        return _resolved_model_name
+
+    if not GEMINI_API_KEY:
+        return None
+
+    try:
+        supported_models = []
+        for m in genai.list_models():
+            if "generateContent" in m.supported_generation_methods:
+                clean_name = m.name.replace("models/", "")
+                supported_models.append(clean_name)
+
+        logger.info(f"Supported models on this API key: {supported_models}")
+
+        # 후보군 순서대로 매칭되는 첫 번째 모델 채택
+        for cand in CANDIDATE_MODELS:
+            clean_cand = cand.replace("models/", "")
+            if clean_cand in supported_models:
+                _resolved_model_name = clean_cand
+                logger.info(f"Auto-selected working Gemini model: {_resolved_model_name}")
+                return _resolved_model_name
+
+        if supported_models:
+            _resolved_model_name = supported_models[0]
+            logger.info(f"Selected first supported Gemini model: {_resolved_model_name}")
+            return _resolved_model_name
+
+    except Exception as e:
+        logger.warning(f"genai.list_models() check failed ({e}). Falling back to candidate sequence.")
+
+    _resolved_model_name = GENERATION_MODEL
+    return _resolved_model_name
 
 # ========================================================================================
 # 2. ChromaDB 멀티벡터 저장소 초기화 및 Fashionpedia 시드 데이터
@@ -194,8 +250,9 @@ class FashionResponse(BaseModel):
 # ========================================================================================
 def translate_query_ko_to_en(korean_query: str) -> str:
     """Step 1: 한국어 사용자 입력을 정밀한 영문 패션 프롬프트로 번역"""
+    fallback_query = f"High fashion runway styling advice for: {korean_query}"
     if not GEMINI_API_KEY:
-        return f"High fashion runway styling advice for: {korean_query}"
+        return fallback_query
     
     prompt = f"""You are a luxury fashion runway director and styling translator.
 Translate the following Korean fashion request into a precise, descriptive English fashion search query.
@@ -204,14 +261,26 @@ Return ONLY the translated English query text without commentary.
 
 [Korean Request]: {korean_query}"""
 
-    try:
-        model = genai.GenerativeModel(GENERATION_MODEL)
-        response = model.generate_content(prompt)
-        translated = response.text.strip()
-        return translated if translated else korean_query
-    except Exception as e:
-        logger.error(f"Translation (KO->EN) failed: {e}")
-        return korean_query
+    # 가용 모델 자동 탐색 및 후보군 순차 시도
+    resolved = get_available_model_name()
+    candidates = [resolved] if resolved else []
+    for c in CANDIDATE_MODELS:
+        if c not in candidates:
+            candidates.append(c)
+
+    for cand_name in candidates:
+        if not cand_name:
+            continue
+        try:
+            model = genai.GenerativeModel(cand_name)
+            response = model.generate_content(prompt)
+            if response.text and response.text.strip():
+                return response.text.strip()
+        except Exception as e:
+            logger.debug(f"Translation with {cand_name} failed: {e}. Trying next...")
+            continue
+
+    return fallback_query
 
 def search_fashion_images(query_en: str, top_k: int = 3) -> List[FashionItemResult]:
     """Step 2: 영문 쿼리를 기반으로 ChromaDB에서 다중벡터 유사도 검색 수행"""
@@ -249,12 +318,14 @@ def search_fashion_images(query_en: str, top_k: int = 3) -> List[FashionItemResu
 
 def generate_vlm_styling_advice(query_en: str, items: List[FashionItemResult], user_img_b64: Optional[str] = None) -> str:
     """Step 3 & 4: 검색된 이미지 컨텍스트와 질문을 결합하여 Google AI VLM 스타일링 조언 생성"""
+    default_fallback_advice = (
+        "Based on the editorial lookbook, pair an architectural oversized tailored coat with "
+        "relaxed-cut wide-leg wool trousers. Maintain an obsidian slate base palette and introduce "
+        "either luminous emerald accents or a structured cobalt leather belt to create high-contrast runway tension."
+    )
+
     if not GEMINI_API_KEY:
-        return (
-            "Based on the editorial lookbook, pair an architectural oversized tailored coat with "
-            "relaxed-cut wide-leg wool trousers. Maintain an obsidian slate base palette and introduce "
-            "either luminous emerald accents or a structured cobalt leather belt to create high-contrast runway tension."
-        )
+        return default_fallback_advice
 
     context_str = ""
     for idx, item in enumerate(items, 1):
@@ -283,33 +354,49 @@ Your response MUST include:
 
 Keep the advice elevated, inspiring, and concise (under 250 words)."""
 
-    try:
-        model = genai.GenerativeModel(GENERATION_MODEL)
-        content_parts = [prompt]
-        
-        # 사용자 업로드 이미지가 있는 경우 VLM 인풋으로 주입
-        if user_img_b64:
-            try:
-                img_bytes = base64.b64decode(user_img_b64.split(",")[-1])
-                pil_img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-                content_parts.append(pil_img)
-            except Exception as e:
-                logger.warning(f"Failed to decode user image for VLM: {e}")
-        
-        response = model.generate_content(content_parts)
-        return response.text.strip()
-    except Exception as e:
-        logger.error(f"VLM Styling Advice generation failed: {e}")
-        return f"Styling synthesis failed: {str(e)}"
+    content_parts = [prompt]
+    if user_img_b64:
+        try:
+            img_bytes = base64.b64decode(user_img_b64.split(",")[-1])
+            pil_img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+            content_parts.append(pil_img)
+        except Exception as e:
+            logger.warning(f"Failed to decode user image for VLM: {e}")
+
+    # 지원 모델 자동 탐색 및 후보군 순차 시도 (404 방지)
+    resolved = get_available_model_name()
+    candidates = [resolved] if resolved else []
+    for c in CANDIDATE_MODELS:
+        if c not in candidates:
+            candidates.append(c)
+
+    for cand_name in candidates:
+        if not cand_name:
+            continue
+        try:
+            model = genai.GenerativeModel(cand_name)
+            response = model.generate_content(content_parts)
+            if response.text and response.text.strip():
+                global _resolved_model_name
+                _resolved_model_name = cand_name
+                return response.text.strip()
+        except Exception as e:
+            logger.warning(f"VLM generation with {cand_name} failed: {e}. Trying next candidate...")
+            continue
+
+    logger.warning("All Gemini VLM model candidates failed. Returning curated fallback advice.")
+    return default_fallback_advice
 
 def translate_advice_en_to_ko(advice_en: str) -> str:
     """Step 5: 영문 VLM 응답을 세련된 한국어 패션 전문 용어로 번역"""
+    default_ko_advice = (
+        "아키텍처럴 오버사이즈 실루엣과 와이드 레그 트라우저의 볼륨감 있는 대비를 연출하는 룩을 제안합니다. "
+        "옵시디언 슬레이트와 차콜 그레이를 메인 캔버스로 구성하고, 런웨이 감성의 에메랄드 테크웨어 포인트나 "
+        "코발트 블루 스트럭처 레더 벨트를 더해 세련된 시각적 텐션을 완성하세요."
+    )
+
     if not GEMINI_API_KEY:
-        return (
-            "아방가르드 오버사이즈 테일러드 코트와 여유로운 와이드 레그 울 트라우저를 매치하여 "
-            "구조적 실루엣을 연출하세요. 슬레이트 차콜을 베이스로 잡고, 에메랄드 테크웨어 포인트나 "
-            "코발트 블루 레더 벨트를 더해 런웨이 무드의 세련된 컬러 텐션을 완성하는 것을 추천합니다."
-        )
+        return default_ko_advice
 
     prompt = f"""당신은 최고급 패션 매거진(Vogue Korea, GQ)의 수석 패션 에디터입니다.
 다음 영문 패션 스타일링 조언을 우아하고 전문적인 한국어 텍스트로 번역/윤문하세요.
@@ -318,13 +405,25 @@ def translate_advice_en_to_ko(advice_en: str) -> str:
 [English Advice]:
 {advice_en}"""
 
-    try:
-        model = genai.GenerativeModel(GENERATION_MODEL)
-        response = model.generate_content(prompt)
-        return response.text.strip()
-    except Exception as e:
-        logger.error(f"Translation (EN->KO) failed: {e}")
-        return advice_en
+    resolved = get_available_model_name()
+    candidates = [resolved] if resolved else []
+    for c in CANDIDATE_MODELS:
+        if c not in candidates:
+            candidates.append(c)
+
+    for cand_name in candidates:
+        if not cand_name:
+            continue
+        try:
+            model = genai.GenerativeModel(cand_name)
+            response = model.generate_content(prompt)
+            if response.text and response.text.strip():
+                return response.text.strip()
+        except Exception as e:
+            logger.debug(f"Translation with {cand_name} failed: {e}. Trying next...")
+            continue
+
+    return default_ko_advice
 
 def build_comparison_streams(items: List[FashionItemResult], advice_ko: str) -> List[ComparisonStream]:
     """Stitch 3단 비교 UI('Editorial Slate Haute Tech') 규격에 맞춘 Stream A/B/C 데이터 구성"""
@@ -409,13 +508,14 @@ app.add_middleware(
 @app.get("/health")
 def health_check():
     """서버 헬스 체크 및 ChromaDB 컬렉션 현황"""
+    resolved_model = get_available_model_name() or GENERATION_MODEL
     return {
         "status": "healthy",
         "service": "FashionRAG Multimodal Server",
         "gemini_api_configured": bool(GEMINI_API_KEY),
         "chromadb_collection_items": collection.count(),
         "active_models": {
-            "vlm": GENERATION_MODEL,
+            "vlm": resolved_model,
             "embedding": EMBEDDING_MODEL
         },
         "design_system": "Editorial Slate Haute Tech"
